@@ -1,7 +1,8 @@
-# app.py
+# app.py 
 # -*- coding: utf-8 -*-
 """
 App Streamlit:
+- Login (e-mail/senha)
 - Carrega até 64 planilhas (CSV/XLS/XLSX/ODS)
 - Detecta a UNIDADE (B10 > A3 > varredura 10 linhas)
 - Mantém TODAS as colunas
@@ -59,6 +60,39 @@ COL_SPECS = {
 }
 
 # =========================
+# AUTENTICAÇÃO (login + senha)
+# =========================
+def get_allowed_credentials() -> Tuple[str, str]:
+    try:
+        email = st.secrets["auth"]["email"]
+        pwd = st.secrets["auth"]["password"]
+    except Exception:
+        email = "vigilanciaepidemiologicadsvii@gmail.com"
+        pwd = "epidemiosifilis"
+    return email, pwd
+
+def login_block():
+    st.title("🔐 Login — e-SUS Fusão & Filtros")
+    with st.form("login_form", clear_on_submit=False):
+        email_in = st.text_input("E-mail", value="", placeholder="seu@email")
+        pwd_in = st.text_input("Senha", value="", type="password")
+        ok = st.form_submit_button("Entrar")
+
+    if ok:
+        allowed_email, allowed_pwd = get_allowed_credentials()
+        if email_in.strip().lower() == allowed_email.lower() and pwd_in == allowed_pwd:
+            st.session_state["auth_ok"] = True
+            st.session_state["user_email"] = email_in.strip()
+            try:
+                st.rerun()
+            except Exception:
+                st.experimental_rerun()
+        else:
+            st.error("E-mail ou senha inválidos.")
+
+    st.stop()
+
+# =========================
 # FUNÇÕES AUXILIARES
 # =========================
 def normalize(s: str) -> str:
@@ -76,7 +110,6 @@ def find_first_matching_col(df: pd.DataFrame, candidates: List[str]) -> Optional
         nc = normalize(c)
         if nc in cols_norm:
             return cols_norm[nc]
-    # fallback por contains
     for real in df.columns:
         rn = normalize(real)
         for cand in candidates:
@@ -85,7 +118,6 @@ def find_first_matching_col(df: pd.DataFrame, candidates: List[str]) -> Optional
     return None
 
 def _read_csv_robusto(file_obj) -> pd.DataFrame:
-    """CSV com detecção automática de separador e tolerância a linhas ruins."""
     if hasattr(file_obj, "read"):
         pos = file_obj.tell() if hasattr(file_obj, "tell") else None
         data = file_obj.read()
@@ -121,8 +153,6 @@ def _read_csv_robusto(file_obj) -> pd.DataFrame:
     return pd.read_csv(buf, header=None, dtype=str, engine="python", on_bad_lines="skip")
 
 def detect_unit_name(raw_df: pd.DataFrame) -> Optional[str]:
-    """Obtém UNIDADE priorizando B10; depois A3; por fim varredura nas 10 primeiras linhas."""
-    # 1) B10 (linha 10 = índice 9; coluna B = índice 1)
     try:
         b10 = raw_df.iloc[9, 1]
         if isinstance(b10, str) and b10.strip() != "":
@@ -130,7 +160,6 @@ def detect_unit_name(raw_df: pd.DataFrame) -> Optional[str]:
     except Exception:
         pass
 
-    # 2) A3
     try:
         a3 = raw_df.iloc[2, 0]
         if isinstance(a3, str) and normalize(a3).startswith("unidade de saude"):
@@ -138,7 +167,6 @@ def detect_unit_name(raw_df: pd.DataFrame) -> Optional[str]:
     except Exception:
         pass
 
-    # 3) Varredura
     for i in range(min(10, len(raw_df))):
         try:
             v = str(raw_df.iloc[i, 0])
@@ -149,26 +177,22 @@ def detect_unit_name(raw_df: pd.DataFrame) -> Optional[str]:
     return None
 
 def read_any_table(file) -> Tuple[pd.DataFrame, Optional[str]]:
-    """Lê CSV/XLSX/XLS/ODS, detecta UNIDADE e devolve DataFrame com TODAS as colunas."""
     name = getattr(file, "name", str(file)).lower()
 
-    # 1) carregar
     if name.endswith(".csv"):
         raw = _read_csv_robusto(file)
     elif name.endswith(".xlsx") or name.endswith(".xls"):
         raw = pd.read_excel(file, header=None, dtype=str)
     elif name.endswith(".ods"):
         try:
-            raw = pd.read_excel(file, engine="odf", header=None, dtype=str)  # requer odfpy
+            raw = pd.read_excel(file, engine="odf", header=None, dtype=str)
         except Exception:
             raw = pd.read_excel(file, header=None, dtype=str)
     else:
         raw = _read_csv_robusto(file)
 
-    # 2) unidade
     unidade = detect_unit_name(raw)
 
-    # 3) detectar linha de cabeçalho (1ª com >=4 células não vazias)
     header_row = None
     for i in range(min(30, len(raw))):
         row = raw.iloc[i]
@@ -179,24 +203,18 @@ def read_any_table(file) -> Tuple[pd.DataFrame, Optional[str]]:
             break
     if header_row is None:
         header_row = 0
-    # (se seu cabeçalho for fixo, por ex. linha 4, pode forçar: header_row = 3)
 
-    # 4) DataFrame com header
     df = raw.copy()
     df.columns = raw.iloc[header_row].fillna("")
     df = raw.iloc[header_row + 1 :].reset_index(drop=True)
     df.columns = [str(c).strip() if str(c).strip() != "" else f"col_{i}" for i, c in enumerate(df.columns)]
 
-    # 5) manter somente linhas com paciente
     col_paciente = find_first_matching_col(df, COLMAP["paciente"]) or df.columns[0]
     df = df[df[col_paciente].notna() & (df[col_paciente].astype(str).str.strip() != "")]
-
-    # 6) coluna UNIDADE para referência
     df["UNIDADE"] = unidade if unidade else "(UNIDADE NAO DETECTADA)"
 
     return df, unidade
 
-# -------- utilitários p/ letras e filtros pedidos --------
 def excel_letter_to_index(letter: str) -> int:
     if not letter or not letter.isalpha():
         return -1
@@ -204,7 +222,7 @@ def excel_letter_to_index(letter: str) -> int:
     idx = 0
     for ch in letter:
         idx = idx * 26 + (ord(ch) - ord('A') + 1)
-    return idx - 1  # 0-based
+    return idx - 1
 
 def get_col_by_letter_or_name(df: pd.DataFrame, letter: str, names: List[str]) -> Optional[str]:
     j = excel_letter_to_index(letter)
@@ -222,7 +240,6 @@ def get_col_by_letter_or_name(df: pd.DataFrame, letter: str, names: List[str]) -
 
 def series_is_nao(s: pd.Series) -> pd.Series:
     sn = s.astype(str).map(normalize)
-    # igualdade exata "não"/"nao"
     return sn.str.fullmatch(r"n[aã]o")
 
 def to_numeric_series(s: pd.Series) -> pd.Series:
@@ -249,15 +266,7 @@ def build_requested_filters(df: pd.DataFrame) -> Tuple[Dict[str, pd.Series], Dic
             masks[code] = x > v
     return masks, found_cols
 
-# -------- XLSX com layout pedido (linha 25 / A25 & BA25 / BA por linha) --------
 def write_xlsx_with_ba_layout(sheets: Dict[str, pd.DataFrame]) -> bytes:
-    """
-    - Cabeçalhos na linha 25
-    - A25 = UNIDADE
-    - BA25 = UNIDADE
-    - BA (todas as linhas de dados) = UNIDADE quando A (paciente) estiver preenchida
-    - Para garantir que A seja "paciente", reordenamos as colunas só na hora de escrever
-    """
     from openpyxl import Workbook
 
     wb = Workbook()
@@ -266,36 +275,31 @@ def write_xlsx_with_ba_layout(sheets: Dict[str, pd.DataFrame]) -> bytes:
 
     HEADER_ROW = 25
     DATA_START_ROW = 26
-    COL_A_IDX = 1    # A
-    COL_BA_IDX = 53  # BA
+    COL_A_IDX = 1
+    COL_BA_IDX = 53
 
     for sheet_name, df_in in sheets.items():
-        # definir coluna paciente para levar para A (apenas na escrita)
         col_paciente = find_first_matching_col(df_in, COLMAP["paciente"]) or df_in.columns[0]
         cols_order = [col_paciente] + [c for c in df_in.columns if c != col_paciente]
         df = df_in[cols_order].copy()
 
         ws = wb.create_sheet(title=sheet_name[:31])
 
-        # cabeçalhos na linha 25
         for j, col in enumerate(df.columns, start=1):
             ws.cell(row=HEADER_ROW, column=j, value=str(col))
 
-        # UNIDADE para A25 e BA25
         unidade_val = "(SEM COLUNA UNIDADE)"
         if "UNIDADE" in df.columns:
             uniques = sorted(set(df["UNIDADE"].dropna().astype(str)))
             unidade_val = uniques[0] if len(uniques) == 1 else "(VARIAS UNIDADES)"
-        ws.cell(row=HEADER_ROW, column=COL_A_IDX, value=unidade_val)   # A25
-        ws.cell(row=HEADER_ROW, column=COL_BA_IDX, value=unidade_val)  # BA25
+        ws.cell(row=HEADER_ROW, column=COL_A_IDX, value=unidade_val)
+        ws.cell(row=HEADER_ROW, column=COL_BA_IDX, value=unidade_val)
 
-        # dados a partir da 26
         for i, (_, row) in enumerate(df.iterrows(), start=DATA_START_ROW):
             for j, col in enumerate(df.columns, start=1):
                 val = None if pd.isna(row[col]) else str(row[col])
                 ws.cell(row=i, column=j, value=val)
 
-            # coluna A é o paciente
             val_a = ws.cell(row=i, column=COL_A_IDX).value
             if val_a is not None and str(val_a).strip() != "":
                 ws.cell(row=i, column=COL_BA_IDX, value=unidade_val)
@@ -318,6 +322,22 @@ def single_sheet_xlsx(df: pd.DataFrame, sheet_name: str = "PLANILHA") -> bytes:
 # =========================
 # UI STREAMLIT
 # =========================
+
+# ---- Gate de login ----
+if not st.session_state.get("auth_ok"):
+    login_block()
+
+# ---- Sidebar (logout) ----
+with st.sidebar:
+    if st.session_state.get("auth_ok"):
+        st.success(f"Conectado: {st.session_state.get('user_email','')}")
+        if st.button("Sair"):
+            st.session_state.clear()
+            try:
+                st.rerun()
+            except Exception:
+                st.experimental_rerun()
+
 st.title("Fusão de Planilhas e-SUS + Filtros (BA com UNIDADE)")
 
 uploaded_files = st.file_uploader(
@@ -342,7 +362,6 @@ if uploaded_files:
                 st.error(f"Erro ao ler {getattr(f, 'name', 'arquivo')}: {e}")
         if not dfs:
             st.stop()
-        # usamos apenas 'base' (evita NameError)
         base = pd.concat(dfs, ignore_index=True)
 
     # ---- Visualização geral ----
@@ -372,9 +391,16 @@ if uploaded_files:
     st.write(f"Linhas após filtro por UNIDADE: {len(base_filtrada)}")
     st.dataframe(base_filtrada.head(300), use_container_width=True, height=420)
 
+    # >>> ALTERAÇÃO: fonte única para relatórios (respeita o filtro quando ligado)
+    df_fonte_relatorios = base_filtrada if (st.session_state["unit_filter_on"] and sel) else base
+    # ----------------------------------------------------------
+
     # ---- Relatórios por AR/AS/AT/AU/AV/NA/AJ (mantendo todas as colunas) ----
     st.subheader("Relatórios específicos (mantendo TODAS as colunas)")
-    masks, found_cols = build_requested_filters(base)
+    # >>> ALTERAÇÃO: construir máscaras com base na fonte escolhida
+    masks, found_cols = build_requested_filters(df_fonte_relatorios)  # <-- antes era base
+    # ----------------------------------------------------------
+
     if found_cols:
         st.caption("Colunas detectadas (código → nome real): " +
                    ", ".join([f"{k}→{v}" for k, v in found_cols.items()]))
@@ -394,7 +420,9 @@ if uploaded_files:
     tables_spec: Dict[str, pd.DataFrame] = {}
     for code in ["AR", "AS", "AT", "AU", "AV", "NA", "AJ"]:
         if code in masks:
-            df_tab = base[masks[code]].copy()
+            # >>> ALTERAÇÃO: filtrar sobre df_fonte_relatorios (já com UNIDADE, se ligado)
+            df_tab = df_fonte_relatorios[masks[code]].copy()
+            # ----------------------------------------------------------
             tables_spec[code] = df_tab
             with st.expander(f"{labels[code]} — {len(df_tab)} linha(s)"):
                 st.dataframe(df_tab.head(300), use_container_width=True, height=360)
@@ -423,7 +451,9 @@ if uploaded_files:
         mask_all = None
         for m in masks.values():
             mask_all = m if mask_all is None else (mask_all & m)
-        df_comb = base[mask_all] if mask_all is not None else base.iloc[0:0]
+        # >>> ALTERAÇÃO: combinado também usa a mesma fonte dos relatórios
+        df_comb = df_fonte_relatorios[mask_all] if mask_all is not None else df_fonte_relatorios.iloc[0:0]
+        # ----------------------------------------------------------
         st.subheader(f"Combinado — atende a TODOS os filtros detectados: {len(df_comb)}")
         st.dataframe(df_comb.head(500), use_container_width=True, height=420)
         cc1, cc2 = st.columns(2)
@@ -443,7 +473,7 @@ if uploaded_files:
             )
 
     # ---- Downloads gerais ----
-    st.subheader("Downloads gerais (XLSX com BA25/A25 + BA por linha)")
+    st.subheader("Downloads gerais (XLSX com A25/BA25 + BA por linha)")
     col_all, col_filt = st.columns(2)
     with col_all:
         sheets_all = {"BASE_COMPLETA": base}
