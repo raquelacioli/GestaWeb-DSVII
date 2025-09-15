@@ -1,4 +1,4 @@
-# app.py 
+# ESUSSifilis.py
 # -*- coding: utf-8 -*-
 """
 App Streamlit:
@@ -24,6 +24,7 @@ from typing import List, Tuple, Dict, Optional
 
 import pandas as pd
 import streamlit as st
+from pathlib import Path
 
 # =========================
 # CONFIGURAÇÕES
@@ -31,7 +32,22 @@ import streamlit as st
 st.set_page_config(page_title="e-SUS — Fusão & Filtros", layout="wide")
 warnings.simplefilter("ignore", category=UserWarning)
 
-# Nomes de colunas genéricas (ajuste se quiser)
+# =========================
+# IMAGEM DO TOPO (LOGIN) - st.image
+# =========================
+HERO_IMAGE = Path(r"C:\Users\raque\Desktop\Banco Sifilis\assets\gestaweb_ds7.jpg")
+
+def show_hero(caption: str = ""):
+    if HERO_IMAGE.exists():
+        st.image(str(HERO_IMAGE), use_container_width=True)
+        if caption.strip():
+            st.caption(caption)
+    else:
+        st.warning(f"Imagem não encontrada em: {HERO_IMAGE}")
+
+# =========================
+# NOMES DE COLUNAS E FILTROS
+# =========================
 COLMAP = {
     "paciente": [
         "nome do paciente", "paciente", "nome",
@@ -41,7 +57,6 @@ COLMAP = {
     ],
 }
 
-# Especificação dos filtros solicitados
 COL_SPECS = {
     "AR": {"desc": "Exame de HIV no 1º trimestre", "type": "text_nao",
            "names": ["Exame de HIV no primeiro trimestre", "hiv 1º trimestre", "hiv 1 tri"]},
@@ -60,7 +75,7 @@ COL_SPECS = {
 }
 
 # =========================
-# AUTENTICAÇÃO (login + senha)
+# AUTENTICAÇÃO
 # =========================
 def get_allowed_credentials() -> Tuple[str, str]:
     try:
@@ -72,6 +87,9 @@ def get_allowed_credentials() -> Tuple[str, str]:
     return email, pwd
 
 def login_block():
+    # Mostra a imagem no topo do login
+    show_hero("GestaWeb DS7 — Monitoramento da gestação e puerpério")
+
     st.title("🔐 Login — e-SUS Fusão & Filtros")
     with st.form("login_form", clear_on_submit=False):
         email_in = st.text_input("E-mail", value="", placeholder="seu@email")
@@ -89,11 +107,10 @@ def login_block():
                 st.experimental_rerun()
         else:
             st.error("E-mail ou senha inválidos.")
-
     st.stop()
 
 # =========================
-# FUNÇÕES AUXILIARES
+# FUNÇÕES AUXILIARES (ETL)
 # =========================
 def normalize(s: str) -> str:
     if not isinstance(s, str):
@@ -129,8 +146,10 @@ def _read_csv_robusto(file_obj) -> pd.DataFrame:
             data = fh.read()
 
     if isinstance(data, bytes):
-        try: text = data.decode("utf-8", "ignore")
-        except Exception: text = data.decode("latin-1", "ignore")
+        try:
+            text = data.decode("utf-8", "ignore")
+        except Exception:
+            text = data.decode("latin-1", "ignore")
     else:
         text = str(data)
 
@@ -322,12 +341,11 @@ def single_sheet_xlsx(df: pd.DataFrame, sheet_name: str = "PLANILHA") -> bytes:
 # =========================
 # UI STREAMLIT
 # =========================
-
-# ---- Gate de login ----
+# Gate de login
 if not st.session_state.get("auth_ok"):
     login_block()
 
-# ---- Sidebar (logout) ----
+# Sidebar (logout)
 with st.sidebar:
     if st.session_state.get("auth_ok"):
         st.success(f"Conectado: {st.session_state.get('user_email','')}")
@@ -340,6 +358,7 @@ with st.sidebar:
 
 st.title("Fusão de Planilhas e-SUS + Filtros (BA com UNIDADE)")
 
+# Upload de arquivos
 uploaded_files = st.file_uploader(
     "Selecione as planilhas (até 64)",
     type=["csv", "xlsx", "xls", "ods"],
@@ -364,11 +383,11 @@ if uploaded_files:
             st.stop()
         base = pd.concat(dfs, ignore_index=True)
 
-    # ---- Visualização geral ----
+    # Pré-visualização
     st.subheader("Pré-visualização da base (todas as colunas)")
     st.dataframe(base.head(300), use_container_width=True, height=420)
 
-    # ---- Filtro por UNIDADE (coluna BA/UNIDADE) com botão ----
+    # Filtro por UNIDADE
     st.subheader("Filtro por UNIDADE (coluna BA/UNIDADE)")
     units = sorted(base["UNIDADE"].dropna().astype(str).unique()) if "UNIDADE" in base.columns else []
     sel = st.multiselect("Selecione a(s) UNIDADE(s)", options=units, default=units[:1] if units else [])
@@ -391,15 +410,12 @@ if uploaded_files:
     st.write(f"Linhas após filtro por UNIDADE: {len(base_filtrada)}")
     st.dataframe(base_filtrada.head(300), use_container_width=True, height=420)
 
-    # >>> ALTERAÇÃO: fonte única para relatórios (respeita o filtro quando ligado)
+    # Fonte única para relatórios (respeita o filtro quando ligado)
     df_fonte_relatorios = base_filtrada if (st.session_state["unit_filter_on"] and sel) else base
-    # ----------------------------------------------------------
 
-    # ---- Relatórios por AR/AS/AT/AU/AV/NA/AJ (mantendo todas as colunas) ----
+    # Relatórios
     st.subheader("Relatórios específicos (mantendo TODAS as colunas)")
-    # >>> ALTERAÇÃO: construir máscaras com base na fonte escolhida
-    masks, found_cols = build_requested_filters(df_fonte_relatorios)  # <-- antes era base
-    # ----------------------------------------------------------
+    masks, found_cols = build_requested_filters(df_fonte_relatorios)
 
     if found_cols:
         st.caption("Colunas detectadas (código → nome real): " +
@@ -420,9 +436,7 @@ if uploaded_files:
     tables_spec: Dict[str, pd.DataFrame] = {}
     for code in ["AR", "AS", "AT", "AU", "AV", "NA", "AJ"]:
         if code in masks:
-            # >>> ALTERAÇÃO: filtrar sobre df_fonte_relatorios (já com UNIDADE, se ligado)
             df_tab = df_fonte_relatorios[masks[code]].copy()
-            # ----------------------------------------------------------
             tables_spec[code] = df_tab
             with st.expander(f"{labels[code]} — {len(df_tab)} linha(s)"):
                 st.dataframe(df_tab.head(300), use_container_width=True, height=360)
@@ -446,14 +460,12 @@ if uploaded_files:
         else:
             st.info(f"Filtro {labels.get(code, code)}: coluna {code} não localizada.")
 
-    # ---- COMBINADO (todas as condições encontradas) ----
+    # Combinado (todas as condições)
     if masks:
         mask_all = None
         for m in masks.values():
             mask_all = m if mask_all is None else (mask_all & m)
-        # >>> ALTERAÇÃO: combinado também usa a mesma fonte dos relatórios
         df_comb = df_fonte_relatorios[mask_all] if mask_all is not None else df_fonte_relatorios.iloc[0:0]
-        # ----------------------------------------------------------
         st.subheader(f"Combinado — atende a TODOS os filtros detectados: {len(df_comb)}")
         st.dataframe(df_comb.head(500), use_container_width=True, height=420)
         cc1, cc2 = st.columns(2)
@@ -472,7 +484,7 @@ if uploaded_files:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-    # ---- Downloads gerais ----
+    # Downloads gerais
     st.subheader("Downloads gerais (XLSX com A25/BA25 + BA por linha)")
     col_all, col_filt = st.columns(2)
     with col_all:
@@ -494,7 +506,7 @@ if uploaded_files:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-    # opcional: uma aba por UNIDADE
+    # XLSX com uma aba por UNIDADE (opcional)
     make_tabs = st.checkbox("Gerar XLSX com **uma aba por UNIDADE**")
     if make_tabs and ("UNIDADE" in base.columns):
         sel_units = sel if sel else units
