@@ -7,7 +7,7 @@ App Streamlit:
 - Detecta a UNIDADE (B10 > A3 > varredura 10 linhas)
 - Mantém TODAS as colunas
 - Filtro por UNIDADE (coluna BA/UNIDADE) com botão
-- Relatórios por AR/AS/AT/AU/AV/NA/AJ (mantendo todas as colunas)
+- Relatórios por AR/AS/AT/AU/AV/AN/AJ (mantendo todas as colunas)
 - Exporta XLSX com cabeçalho na linha 25:
     * A25 = UNIDADE
     * BA25 = UNIDADE
@@ -29,21 +29,34 @@ from pathlib import Path
 # =========================
 # CONFIGURAÇÕES
 # =========================
-st.set_page_config(page_title="e-SUS — Fusão & Filtros", layout="wide")
+st.set_page_config(page_title="e-SUS — Filtros", layout="wide")
 warnings.simplefilter("ignore", category=UserWarning)
 
 # =========================
-# IMAGEM DO TOPO (LOGIN) - st.image
+# BANNER NO LOGIN (apenas no login)
 # =========================
-HERO_IMAGE = Path(r"C:\Users\raque\Desktop\Banco Sifilis\assets\gestaweb_ds7.jpg")
+HERO_CANDIDATES = [
+    r"C:\Users\raque\Desktop\Banco Sifilis\assets\gestaweb_ds7.jpg",  # seu caminho
+    "assets/gestaweb_ds7.jpg",                                        # relativo ao projeto
+    "/mnt/data/gestaweb_ds7.jpg",                                     # fallback
+]
 
-def show_hero(caption: str = ""):
-    if HERO_IMAGE.exists():
-        st.image(str(HERO_IMAGE), use_container_width=True)
-        if caption.strip():
-            st.caption(caption)
+def _pick_hero_path() -> Optional[Path]:
+    for p in HERO_CANDIDATES:
+        path = Path(p)
+        if path.exists():
+            return path
+    return None
+
+def show_login_banner():
+    hero = _pick_hero_path()
+    if hero and hero.exists():
+        st.image(str(hero), use_container_width=True)
     else:
-        st.warning(f"Imagem não encontrada em: {HERO_IMAGE}")
+        st.info(
+            "Imagem do banner não encontrada. Verifique o caminho em HERO_CANDIDATES "
+            "ou copie o arquivo para ./assets/gestaweb_ds7.jpg"
+        )
 
 # =========================
 # NOMES DE COLUNAS E FILTROS
@@ -68,7 +81,7 @@ COL_SPECS = {
            "names": ["Exame de Hepatite C no primeiro trimestre", "hcv 1º trimestre", "hepatite c 1 tri"]},
     "AV": {"desc": "Exame de HIV no 3º trimestre", "type": "text_nao",
            "names": ["Exame de HIV no terceiro trimestre", "hiv 3º trimestre", "hiv 3 tri"]},
-    "NA": {"desc": "Qtde atendimentos odontológicos no pré-natal", "type": "num_lt", "value": 1,
+    "AN": {"desc": "Qtde atendimentos odontológicos no pré-natal", "type": "num_lt", "value": 1,
            "names": ["Quantidade de atendimentos odontológicos no pré-natal", "odontol", "atend odont"]},
     "AJ": {"desc": "IG (DUM) (semanas)", "type": "num_gt", "value": 43,
            "names": ["IG (DUM) (semanas)", "idade gestacional (dum)", "ig semanas"]},
@@ -87,10 +100,10 @@ def get_allowed_credentials() -> Tuple[str, str]:
     return email, pwd
 
 def login_block():
-    # Mostra a imagem no topo do login
-    show_hero("GestaWeb DS7 — Monitoramento da gestação e puerpério")
+    # banner só no login
+    show_login_banner()
 
-    st.title("🔐 Login — e-SUS Fusão & Filtros")
+    st.title("🔐 Login — e-SUS")
     with st.form("login_form", clear_on_submit=False):
         email_in = st.text_input("E-mail", value="", placeholder="seu@email")
         pwd_in = st.text_input("Senha", value="", type="password")
@@ -139,8 +152,10 @@ def _read_csv_robusto(file_obj) -> pd.DataFrame:
         pos = file_obj.tell() if hasattr(file_obj, "tell") else None
         data = file_obj.read()
         if pos is not None:
-            try: file_obj.seek(pos)
-            except Exception: pass
+            try:
+                file_obj.seek(pos)
+            except Exception:
+                pass
     else:
         with open(file_obj, "rb") as fh:
             data = fh.read()
@@ -212,6 +227,7 @@ def read_any_table(file) -> Tuple[pd.DataFrame, Optional[str]]:
 
     unidade = detect_unit_name(raw)
 
+    # Detecta linha de cabeçalho
     header_row = None
     for i in range(min(30, len(raw))):
         row = raw.iloc[i]
@@ -223,11 +239,13 @@ def read_any_table(file) -> Tuple[pd.DataFrame, Optional[str]]:
     if header_row is None:
         header_row = 0
 
+    # Reconstrói DF
     df = raw.copy()
     df.columns = raw.iloc[header_row].fillna("")
     df = raw.iloc[header_row + 1 :].reset_index(drop=True)
     df.columns = [str(c).strip() if str(c).strip() != "" else f"col_{i}" for i, c in enumerate(df.columns)]
 
+    # Mantém linhas com paciente
     col_paciente = find_first_matching_col(df, COLMAP["paciente"]) or df.columns[0]
     df = df[df[col_paciente].notna() & (df[col_paciente].astype(str).str.strip() != "")]
     df["UNIDADE"] = unidade if unidade else "(UNIDADE NAO DETECTADA)"
@@ -356,7 +374,7 @@ with st.sidebar:
             except Exception:
                 st.experimental_rerun()
 
-st.title("Fusão de Planilhas e-SUS + Filtros (BA com UNIDADE)")
+st.title("Unidades de Saúde DSVII — e-SUS Monitoramento")
 
 # Upload de arquivos
 uploaded_files = st.file_uploader(
@@ -383,11 +401,11 @@ if uploaded_files:
             st.stop()
         base = pd.concat(dfs, ignore_index=True)
 
-    # Pré-visualização
+    # ---- Visualização geral ----
     st.subheader("Pré-visualização da base (todas as colunas)")
     st.dataframe(base.head(300), use_container_width=True, height=420)
 
-    # Filtro por UNIDADE
+    # ---- Filtro por UNIDADE (coluna BA/UNIDADE) com botão ----
     st.subheader("Filtro por UNIDADE (coluna BA/UNIDADE)")
     units = sorted(base["UNIDADE"].dropna().astype(str).unique()) if "UNIDADE" in base.columns else []
     sel = st.multiselect("Selecione a(s) UNIDADE(s)", options=units, default=units[:1] if units else [])
@@ -410,10 +428,10 @@ if uploaded_files:
     st.write(f"Linhas após filtro por UNIDADE: {len(base_filtrada)}")
     st.dataframe(base_filtrada.head(300), use_container_width=True, height=420)
 
-    # Fonte única para relatórios (respeita o filtro quando ligado)
+    # >>> Fonte única para relatórios (respeita o filtro quando ligado)
     df_fonte_relatorios = base_filtrada if (st.session_state["unit_filter_on"] and sel) else base
 
-    # Relatórios
+    # ---- Relatórios por AR/AS/AT/AU/AV/NA/AJ ----
     st.subheader("Relatórios específicos (mantendo TODAS as colunas)")
     masks, found_cols = build_requested_filters(df_fonte_relatorios)
 
@@ -421,7 +439,7 @@ if uploaded_files:
         st.caption("Colunas detectadas (código → nome real): " +
                    ", ".join([f"{k}→{v}" for k, v in found_cols.items()]))
     else:
-        st.info("AR/AS/AT/AU/AV/NA/AJ não localizadas por letra nem por nome — verifique o cabeçalho.")
+        st.info("AR/AS/AT/AU/AV/AN/AJ não localizadas por letra nem por nome — verifique o cabeçalho.")
 
     labels = {
         "AR": "HIV 1º tri = NÃO",
@@ -429,12 +447,12 @@ if uploaded_files:
         "AT": "Hepatite B 1º tri = NÃO",
         "AU": "Hepatite C 1º tri = NÃO",
         "AV": "HIV 3º tri = NÃO",
-        "NA": "Odonto pré-natal < 1",
+        "AN": "Odonto pré-natal < 1",
         "AJ": "IG (DUM) semanas > 43",
     }
 
     tables_spec: Dict[str, pd.DataFrame] = {}
-    for code in ["AR", "AS", "AT", "AU", "AV", "NA", "AJ"]:
+    for code in ["AR", "AS", "AT", "AU", "AV", "AN", "AJ"]:
         if code in masks:
             df_tab = df_fonte_relatorios[masks[code]].copy()
             tables_spec[code] = df_tab
@@ -460,64 +478,8 @@ if uploaded_files:
         else:
             st.info(f"Filtro {labels.get(code, code)}: coluna {code} não localizada.")
 
-    # Combinado (todas as condições)
-    if masks:
-        mask_all = None
-        for m in masks.values():
-            mask_all = m if mask_all is None else (mask_all & m)
-        df_comb = df_fonte_relatorios[mask_all] if mask_all is not None else df_fonte_relatorios.iloc[0:0]
-        st.subheader(f"Combinado — atende a TODOS os filtros detectados: {len(df_comb)}")
-        st.dataframe(df_comb.head(500), use_container_width=True, height=420)
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            st.download_button(
-                "Baixar COMBINADO.csv",
-                data=df_to_csv_bytes(df_comb),
-                file_name="COMBINADO.csv",
-                mime="text/csv",
-            )
-        with cc2:
-            st.download_button(
-                "Baixar COMBINADO.xlsx",
-                data=single_sheet_xlsx(df_comb, sheet_name="COMBINADO"),
-                file_name="COMBINADO.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+      
 
-    # Downloads gerais
-    st.subheader("Downloads gerais (XLSX com A25/BA25 + BA por linha)")
-    col_all, col_filt = st.columns(2)
-    with col_all:
-        sheets_all = {"BASE_COMPLETA": base}
-        xlsx_all = write_xlsx_with_ba_layout(sheets_all)
-        st.download_button(
-            "Baixar XLSX (sem filtro)",
-            data=xlsx_all,
-            file_name="eSUS_completo.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-    with col_filt:
-        sheets_f = {"BASE_FILTRADA": base_filtrada}
-        xlsx_f = write_xlsx_with_ba_layout(sheets_f)
-        st.download_button(
-            "Baixar XLSX (filtrado por UNIDADE)",
-            data=xlsx_f,
-            file_name="eSUS_filtrado_por_unidade.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-    # XLSX com uma aba por UNIDADE (opcional)
-    make_tabs = st.checkbox("Gerar XLSX com **uma aba por UNIDADE**")
-    if make_tabs and ("UNIDADE" in base.columns):
-        sel_units = sel if sel else units
-        if sel_units:
-            sheets_by_unit = {f"UNID_{u[:25]}": base[base["UNIDADE"] == u] for u in sel_units}
-            xlsx_tabs = write_xlsx_with_ba_layout(sheets_by_unit)
-            st.download_button(
-                "Baixar XLSX (uma aba por UNIDADE)",
-                data=xlsx_tabs,
-                file_name="eSUS_por_unidade.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+   
 else:
     st.info("Carregue seus arquivos para iniciar. Formatos aceitos: CSV, XLSX/XLS e ODS (requer odfpy).")
