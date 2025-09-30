@@ -5,6 +5,7 @@ GestaWeb DS7 — e-SUS Monitoramento (DS VII) com login Firebase e bloqueio por 
 - Login (Firebase Email/Password, via Pyrebase)
 - ADMIN único pode carregar até 69 planilhas (CSV/XLS/XLSX/ODS)
 - Base é persistida em disco para todos os usuários (data/base.parquet ou CSV de fallback)
+- <<< CORRIGIDO: Carrega credenciais do Firestore de um arquivo JSON separado >>>
 - Usuários comuns: somente visualização e apenas da(s) sua(s) UNIDADE(s)
 - Detecta UNIDADE (prioriza coluna do arquivo; fallback por heurística)
 - Mantém TODAS as colunas
@@ -17,6 +18,7 @@ import re
 import csv
 import unicodedata
 import warnings
+import datetime
 from io import StringIO
 from typing import List, Tuple, Dict, Optional
 from pathlib import Path
@@ -24,41 +26,69 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 import altair as alt
+import numpy as np
 
 warnings.simplefilter("ignore", category=UserWarning)
 st.set_page_config(page_title="GestaWeb DS7 — e-SUS", layout="wide")
 
-# =========================
-# Firebase (Pyrebase)
-# =========================
+# <<< INÍCIO DA SEÇÃO CORRIGIDA >>>
+# --- Importações necessárias ---
 try:
-    import pyrebase  # pip install pyrebase4
-except Exception:
-    st.error("Dependência ausente: instale 'pyrebase4' (pip install pyrebase4).")
+    from google.cloud import firestore
+    from google.oauth2 import service_account
+    import pyrebase
+except ImportError:
+    st.error("Dependências ausentes! Por favor, instale: pip install pyrebase4 google-cloud-firestore")
     st.stop()
 
-# >>> SUA CONFIG DO FIREBASE (corrigida para Pyrebase; não usa st.secrets) <<<
+# =========================
+# Configuração das Credenciais e Conexões
+# =========================
+
+# >>> IMPORTANTE: Coloque o nome (ou caminho) do seu arquivo de credenciais do Firestore aqui <<<
+FIRESTORE_CREDENTIALS_PATH = "service_account.json"  # ALTERE SE O NOME DO SEU ARQUIVO FOR DIFERENTE
+
+# Configuração do Pyrebase (usado apenas para o login de email/senha)
 FIREBASE_CONFIG = {
-    # Projeto: gestawebds7raquelacioli
     "apiKey": "AIzaSyD7-HwufkeY97nP5I61DZJaeCTNY7ccvKo",
     "authDomain": "gestawebds7raquelacioli.firebaseapp.com",
     "projectId": "gestawebds7raquelacioli",
-    # Para Pyrebase, o bucket padrão deve ser .appspot.com
     "storageBucket": "gestawebds7raquelacioli.appspot.com",
     "messagingSenderId": "536966961533",
     "appId": "1:536966961533:web:1f4b0bfe25f60799c31414",
-    # Se futuramente usar Realtime DB, descomente e preencha:
     "databaseURL": "https://gestawebds7raquelacioli-default-rtdb.firebaseio.com"
 }
 
+# --- Inicialização do Pyrebase (para Login) ---
 @st.cache_resource(show_spinner=False)
 def firebase_init():
     try:
         fb = pyrebase.initialize_app(FIREBASE_CONFIG)
         return fb
     except Exception as e:
-        st.error(f"Falha ao inicializar Firebase: {e}")
+        st.error(f"Falha ao inicializar Pyrebase (para login): {e}")
         st.stop()
+
+# --- Inicialização do Firestore (para o Banco de Dados) ---
+@st.cache_resource(show_spinner=False)
+def get_firestore_client():
+    """Inicializa o cliente do Firestore usando um arquivo de credenciais."""
+    try:
+        # Verifica se o arquivo de credenciais existe no caminho especificado
+        if not Path(FIRESTORE_CREDENTIALS_PATH).is_file():
+            st.error(f"ARQUIVO DE CREDENCIAIS NÃO ENCONTRADO!")
+            st.error(f"Verifique se o arquivo '{FIRESTORE_CREDENTIALS_PATH}' está na pasta correta.")
+            st.info("O caminho do arquivo é definido na variável 'FIRESTORE_CREDENTIALS_PATH' no topo do script.")
+            st.stop()
+        
+        creds = service_account.Credentials.from_service_account_file(FIRESTORE_CREDENTIALS_PATH)
+        db = firestore.Client(credentials=creds)
+        return db
+    except Exception as e:
+        st.error(f"Falha ao conectar com o Firestore usando o arquivo de credenciais: {e}")
+        st.stop()
+# <<< FIM DA SEÇÃO CORRIGIDA >>>
+
 
 def firebase_sign_in(firebase, email: str, password: str):
     auth = firebase.auth()
@@ -107,6 +137,71 @@ def load_base_from_disk() -> Optional[pd.DataFrame]:
     return None
 
 # =========================
+# Persistência no Firestore
+# =========================
+def clean_firestore_value(value):
+    """Converte valores do Pandas para tipos compatíveis com Firestore."""
+    if pd.isna(value) or value is None:
+        return None
+    if isinstance(value, (np.int64, np.int32, np.int16)):
+        return int(value)
+    if isinstance(value, (np.float64, np.float32)):
+        return float(value)
+    if isinstance(value, (pd.Timestamp, datetime.datetime, datetime.date)):
+        return value.to_pydatetime() if isinstance(value, pd.Timestamp) else value
+    return str(value)
+
+def save_to_firestore(df: pd.DataFrame, collection_name: str = "gestantes_sifilis"):
+    """
+    Converte um DataFrame e salva cada linha como um documento no Firestore.
+    """
+    try:
+        db = get_firestore_client()
+        st.info(f"Iniciando salvamento de {len(df)} registros no Firestore na coleção '{collection_name}'...")
+
+        sanitized_columns = {col: re.sub(r'[^a-zA-Z0-9_]', '_', col) for col in df.columns}
+        df_sanitized = df.rename(columns=sanitized_columns)
+        
+        col_paciente_sanitized = find_first_matching_col(df_sanitized, COLMAP["paciente"]) or df_sanitized.columns[0]
+        unidade_col_sanitized = "UNIDADE" if "UNIDADE" in df_sanitized.columns else None
+
+        progress_bar = st.progress(0)
+        total_rows = len(df_sanitized)
+        
+        batch = db.batch()
+        batch_count = 0
+        
+        for i, row in df_sanitized.iterrows():
+            doc_data = {col: clean_firestore_value(val) for col, val in row.items()}
+            
+            paciente_nome = normalize(str(doc_data.get(col_paciente_sanitized, ""))).replace(" ", "_")
+            unidade = normalize(str(doc_data.get(unidade_col_sanitized, "sem_unidade"))).replace(" ", "_")
+            doc_id = f"{unidade}_{paciente_nome}_{i}"
+            
+            doc_data["_timestamp_upload"] = firestore.SERVER_TIMESTAMP
+            
+            doc_ref = db.collection(collection_name).document(doc_id)
+            batch.set(doc_ref, doc_data)
+            batch_count += 1
+            
+            if batch_count >= 499:
+                batch.commit()
+                batch = db.batch()
+                batch_count = 0
+
+            progress_bar.progress((i + 1) / total_rows)
+            
+        if batch_count > 0:
+            batch.commit()
+            
+        progress_bar.empty()
+        st.success(f"Todos os {total_rows} registros foram salvos/atualizados no Firestore com sucesso!")
+
+    except Exception as e:
+        st.error(f"Ocorreu um erro ao salvar os dados no Firestore: {e}")
+        st.exception(e)
+
+# =========================
 # Mapeamentos de coluna e critérios
 # =========================
 COLMAP = {
@@ -148,7 +243,6 @@ LABELS = {
 
 # =========================
 # Admin e mapeamento e-mail -> UNIDADE(s)
-# (use exatamente a grafia que sai na coluna UNIDADE dos arquivos)
 # =========================
 ADMIN_EMAILS = {"vigilanciaepidemiologicadsvii@gmail.com"}
 
@@ -476,10 +570,18 @@ if is_admin and uploaded_files:
                 st.error(f"Erro ao ler {getattr(f, 'name', 'arquivo')}: {e}")
         if not dfs:
             st.stop()
-        st.session_state["base_df"] = pd.concat(dfs, ignore_index=True)
-        # Persistência para as próximas sessões/usuários
-        save_base_to_disk(st.session_state["base_df"])
-        st.success("Base atualizada e salva (disponível para todos os usuários).")
+        
+        # Consolida os dados
+        consolidated_df = pd.concat(dfs, ignore_index=True)
+        st.session_state["base_df"] = consolidated_df
+        
+        # 1. Persistência em disco (para as próximas sessões/usuários)
+        save_base_to_disk(consolidated_df)
+        st.success("Base atualizada e salva em disco (disponível para todos os usuários).")
+        
+        # 2. Persistência no Firestore
+        save_to_firestore(consolidated_df.copy(), collection_name="gestantes")
+
 
 # Recupera base da sessão ou do disco
 if "base_df" not in st.session_state:
