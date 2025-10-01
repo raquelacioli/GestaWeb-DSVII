@@ -681,7 +681,7 @@ for code in ["AR", "AS", "AT", "AU", "AV", "AN", "AJ"]:
 
 # ===== Análise por critério + gráfico por unidade =====
 st.subheader("Análise por critério e Unidade de Saúde")
-crit_options = ["AR", "AS", "AT", "AU", "AV", "AN", "AJ", "NA"]
+crit_options = ["Exame de HIV no primeiro trimestre", "Exame de Sífilis no primeiro trimestre", "Exame de Hepatite B no primeiro trimestre", "Exame de Hepatite C no primeiro trimestre", "Exame de HIV no terceiro trimestre", "Quantidade de atendimentos odontológicos no pré-natal", "IG (DUM) (semanas)"]
 crit_selecionado = st.selectbox(
     "Escolha o critério",
     options=crit_options,
