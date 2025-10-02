@@ -680,18 +680,53 @@ for code in ["AR", "AS", "AT", "AU", "AV", "AN", "AJ"]:
         st.info(f"Filtro {LABELS.get(code, code)}: coluna {code} não localizada.")
 
 # ===== Análise por critério + gráfico por unidade =====
+
 st.subheader("Análise por critério e Unidade de Saúde")
-crit_options = ["Exame de HIV no primeiro trimestre", "Exame de Sífilis no primeiro trimestre", "Exame de Hepatite B no primeiro trimestre", "Exame de Hepatite C no primeiro trimestre", "Exame de HIV no terceiro trimestre", "Quantidade de atendimentos odontológicos no pré-natal", "IG (DUM) (semanas)"]
+
+def _norm(s: str) -> str:
+    s = unicodedata.normalize("NFKD", str(s))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+def resolve_crit_key(selection_text: str) -> Optional[str]:
+    """Mapeia o texto mostrado no selectbox para o código (AR/AS/.../AJ)."""
+    sel_n = _norm(selection_text)
+    for code, spec in COL_SPECS.items():
+        # 1) casa exatamente com a descrição oficial
+        if sel_n == _norm(spec.get("desc", "")):
+            return code
+        # 2) casa com qualquer sinônimo declarado em names
+        for nm in spec.get("names", []):
+            if sel_n == _norm(nm):
+                return code
+        # 3) fallback: contém (para tolerar pequenas variações)
+        if _norm(spec.get("desc", "")) in sel_n:
+            return code
+        for nm in spec.get("names", []):
+            if _norm(nm) in sel_n:
+                return code
+    return None
+
+# Mostre as opções amigáveis a partir dos próprios specs (primeiro name + desc)
+crit_options = []
+for code, spec in COL_SPECS.items():
+    # use o primeiro sinônimo, senão a descrição
+    label = (spec.get("names") or [spec.get("desc", code)])[0]
+    crit_options.append(label)
+# Garanta ordem consistente
+crit_options = sorted(set(crit_options), key=lambda x: _norm(x))
+
 crit_selecionado = st.selectbox(
     "Escolha o critério",
     options=crit_options,
     index=0,
-    help="Ex.: AR = Exame de HIV no 1º trimestre = NÃO"
+    help="Os critérios mapeiam para AR/AS/AT/AU/AV/AN/AJ conforme o cabeçalho das planilhas."
 )
-crit_key = CODE_ALIAS.get(crit_selecionado, crit_selecionado)
 
-if crit_key not in COL_SPECS:
-    st.warning("Critério não reconhecido.")
+crit_key = resolve_crit_key(crit_selecionado)
+
+if not crit_key:
+    st.warning("Critério não reconhecido (sem mapeamento).")
 elif crit_key not in masks:
     st.warning(f"O critério {crit_key} não foi localizado nas planilhas.")
 else:
@@ -734,6 +769,7 @@ else:
             ],
         )
         st.altair_chart(chart.properties(height=420, width="container"), use_container_width=True)
+
 
 # ===== Resumo e comparativo por prefixo (opcional) =====
 TARGET_PREFIXES = [
