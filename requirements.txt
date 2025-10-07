@@ -8,6 +8,9 @@ protobuf>=4.24,<5
 pandas>=2.0
 altair>=5.0
 openpyxl>=3.1
-pyarrow>=14.0
+# Se você REALMENTE precisa ler .parquet, deixe pyarrow; senão remova para acelerar o build
+# pyarrow>=14.0
+# Se você lê .ods, mantenha o odfpy
+odfpy>=1.4.1
 sseclient-py
 requests_toolbelt
