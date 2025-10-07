@@ -5,7 +5,7 @@ GestaWeb DS7 — e-SUS Monitoramento (DS VII) com login Firebase e bloqueio por 
 - Login (Firebase Email/Password, via Pyrebase)
 - ADMIN único pode carregar até 69 planilhas (CSV/XLS/XLSX/ODS)
 - Base é persistida em disco para todos os usuários (data/base.parquet ou CSV de fallback)
-- <<< CORRIGIDO: Carrega credenciais do Firestore de um arquivo JSON separado >>>
+- Carrega credenciais do Firestore de um arquivo JSON separado
 - Usuários comuns: somente visualização e apenas da(s) sua(s) UNIDADE(s)
 - Detecta UNIDADE (prioriza coluna do arquivo; fallback por heurística)
 - Mantém TODAS as colunas
@@ -145,40 +145,40 @@ def sanitize_doc_id(s: str) -> str:
     s = s[:150].strip("-.")
     return s or f"doc_{uuid4().hex[:10]}"
 
-def save_to_firestore(df: pd.DataFrame, collection_name: str = "gestantes_sifilis"):
-    try:
-        db = get_firestore_client()
-        st.info(f"Salvando {len(df)} registros em '{collection_name}'...")
-        sanitized_columns = {col: re.sub(r'[^a-zA-Z0-9_]', '_', col) for col in df.columns}
-        df_sanitized = df.rename(columns=sanitized_columns)
-        col_paciente = find_first_matching_col(df_sanitized, COLMAP["paciente"]) or df_sanitized.columns[0]
-        unidade_col = "UNIDADE" if "UNIDADE" in df_sanitized.columns else None
+# def save_to_firestore(df: pd.DataFrame, collection_name: str = "gestantes_sifilis"):
+#     try:
+#         db = get_firestore_client()
+#         st.info(f"Salvando {len(df)} registros em '{collection_name}'...")
+#         sanitized_columns = {col: re.sub(r'[^a-zA-Z0-9_]', '_', col) for col in df.columns}
+#         df_sanitized = df.rename(columns=sanitized_columns)
+#         col_paciente = find_first_matching_col(df_sanitized, COLMAP["paciente"]) or df_sanitized.columns[0]
+#         unidade_col = "UNIDADE" if "UNIDADE" in df_sanitized.columns else None
 
-        progress_bar = st.progress(0)
-        batch = db.batch()
-        batch_count = 0
-        total = len(df_sanitized)
+#         progress_bar = st.progress(0)
+#         batch = db.batch()
+#         batch_count = 0
+#         total = len(df_sanitized)
 
-        for i, row in df_sanitized.iterrows():
-            doc = {c: clean_firestore_value(v) for c, v in row.items()}
-            paciente_id = sanitize_doc_id(str(doc.get(col_paciente, "")))
-            unidade_id  = sanitize_doc_id(str(doc.get(unidade_col, "sem_unidade")))
-            doc_id = f"{unidade_id}__{paciente_id}__{i}"
-            doc["_timestamp_upload"] = firestore.SERVER_TIMESTAMP
-            batch.set(db.collection(collection_name).document(doc_id), doc)
-            batch_count += 1
-            if batch_count >= 499:
-                batch.commit()
-                batch = db.batch()
-                batch_count = 0
-            progress_bar.progress((i + 1) / total)
-        if batch_count:
-            batch.commit()
-        progress_bar.empty()
-        st.success("Registros salvos/atualizados com sucesso!")
-    except Exception as e:
-        st.error(f"Erro ao salvar no Firestore: {e}")
-        st.exception(e)
+#         for i, row in df_sanitized.iterrows():
+#             doc = {c: clean_firestore_value(v) for c, v in row.items()}
+#             paciente_id = sanitize_doc_id(str(doc.get(col_paciente, "")))
+#             unidade_id  = sanitize_doc_id(str(doc.get(unidade_col, "sem_unidade")))
+#             doc_id = f"{unidade_id}__{paciente_id}__{i}"
+#             doc["_timestamp_upload"] = firestore.SERVER_TIMESTAMP
+#             batch.set(db.collection(collection_name).document(doc_id), doc)
+#             batch_count += 1
+#             if batch_count >= 499:
+#                 batch.commit()
+#                 batch = db.batch()
+#                 batch_count = 0
+#             progress_bar.progress((i + 1) / total)
+#         if batch_count:
+#             batch.commit()
+#         progress_bar.empty()
+#         st.success("Registros salvos/atualizados com sucesso!")
+#     except Exception as e:
+#         st.error(f"Erro ao salvar no Firestore: {e}")
+#         st.exception(e)
 
 # =========================
 # Mapeamentos / critérios
@@ -433,7 +433,7 @@ def single_sheet_xlsx(df: pd.DataFrame, sheet_name: str = "PLANILHA") -> bytes:
 # =========================
 def login_block():
     show_login_banner()
-    st.title("🔐 Login — GestaWeb DS7 (Firebase)")
+    st.title("🔐 Login — GestaWeb DS7")
     with st.form("login_form", clear_on_submit=False):
         email_in = st.text_input("E-mail institucional", value="", placeholder="nome@dominio")
         pwd_in   = st.text_input("Senha", value="", type="password")
@@ -510,7 +510,7 @@ if is_admin and uploaded_files:
         st.session_state["base_df"] = consolidated_df
         save_base_to_disk(consolidated_df)
         st.success("Base atualizada e salva em disco (disponível para todos).")
-        save_to_firestore(consolidated_df.copy(), collection_name="gestantes")
+        # save_to_firestore(consolidated_df.copy(), collection_name="gestantes")
 
 # Carrega base (sessão ou disco)
 if "base_df" not in st.session_state:
