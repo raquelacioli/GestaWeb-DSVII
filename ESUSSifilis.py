@@ -31,15 +31,77 @@ import numpy as np
 
 warnings.simplefilter("ignore", category=UserWarning)
 st.set_page_config(page_title="GestaWeb DS7 — e-SUS", layout="wide")
+# --- Dependências externas (checagem + instalador local opcional) ---
+import importlib, sys, subprocess
 
-# --- Dependências externas ---
-try:
-    from google.cloud import firestore
-    from google.oauth2 import service_account
-    import pyrebase
-except ImportError:
-    st.error("Dependências ausentes! Instale: pip install pyrebase4 google-cloud-firestore")
+# Pacotes que você listou (com versões seguras para Firestore)
+REQUIRED_PIP = [
+    "streamlit>=1.36",
+    "pyrebase4==4.7.1",
+    "google-cloud-firestore==2.16.0",
+    "google-auth==2.33.0",
+    "google-api-core==2.19.1",
+    "grpcio==1.65.5",
+    "protobuf>=4.24,<5",
+    "pandas>=2.0",
+    "altair>=5.0",
+    "openpyxl>=3.1",
+    "pyarrow>=14.0",
+    "sseclient-py",
+    "requests_toolbelt",
+]
+
+def _check_imports():
+    missing = []
+    # atenção: o pacote instalado é "pyrebase4", mas o import é "pyrebase"
+    try:
+        importlib.import_module("pyrebase")
+    except Exception as e:
+        missing.append(("pyrebase4", "import pyrebase", repr(e)))
+
+    try:
+        importlib.import_module("google.cloud.firestore")
+    except Exception as e:
+        missing.append(("google-cloud-firestore", "from google.cloud import firestore", repr(e)))
+
+    try:
+        importlib.import_module("google.oauth2.service_account")
+    except Exception as e:
+        missing.append(("google-auth", "from google.oauth2 import service_account", repr(e)))
+
+    return missing
+
+_missing = _check_imports()
+
+if _missing:
+    st.error("Dependências ausentes ou com erro no import:")
+    st.write("\n".join([f"- **{pkg}** (falhou em `{hint}`) → {err}" for pkg, hint, err in _missing]))
+
+    # Mostra o comando pip que você pediu
+    pip_cmd = (
+        'pip install streamlit pyrebase4 google-cloud-firestore google-auth '
+        'google-api-core grpcio "protobuf>=4.24,<5" pandas altair openpyxl '
+        'pyarrow sseclient-py requests_toolbelt'
+    )
+    st.caption("Comando sugerido (ambiente local):")
+    st.code(pip_cmd, language="bash")
+
+    # Instalador local opcional
+    if st.button("⚙️ Instalar dependências (ambiente local)"):
+        try:
+            for pkg in REQUIRED_PIP:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+            st.success("Dependências instaladas com sucesso. Reiniciando o app…")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Falha ao instalar dependências: {e!r}")
+    st.info("No Streamlit Cloud, use um arquivo requirements.txt na raiz do projeto.")
     st.stop()
+
+# Se chegou aqui, os imports estão OK:
+import pyrebase                               # pacote instalado: pyrebase4
+from google.cloud import firestore
+from google.oauth2 import service_account
 
 # =========================
 # Credenciais / Conexões
@@ -811,13 +873,14 @@ else:
     x=alt.X("bucket:O", sort=ordem_buckets, title="Unidade (agrupada por prefixo)"),
     y=alt.Y("quantidade:Q", title="Quantidade"),
     color=alt.Color("criterio:N", title="Critério"),
-    xOffset=alt.XOffset("criterio:N"),  # <- importante: XOffset, não X
+    xOffset=alt.XOffset("criterio:N"),  # importante: XOffset, não X
     tooltip=[
         alt.Tooltip("bucket:O",     title="Unidade"),
         alt.Tooltip("criterio:N",   title="Critério"),
         alt.Tooltip("quantidade:Q", title="Quantidade"),
     ],
 )
-st.altair_chart(chart_buckets.properties(height=440, width="container"), use_container_width=True)
-
-             
+st.altair_chart(
+    chart_buckets.properties(height=440, width="container"),
+    use_container_width=True
+)
