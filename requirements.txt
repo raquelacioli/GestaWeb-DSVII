@@ -1,0 +1,6 @@
+streamlit
+pandas
+pyrebase4
+openpyxl
+odfpy
+google-cloud-firestore
