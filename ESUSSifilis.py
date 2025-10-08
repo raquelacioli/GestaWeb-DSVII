@@ -46,7 +46,6 @@ REQUIRED_PIP = [
     "pandas>=2.0",
     "altair>=5.0",
     "openpyxl>=3.1",
-    "pyarrow>=14.0",
     "sseclient-py",
     "requests_toolbelt",
 ]
@@ -81,8 +80,7 @@ if _missing:
     pip_cmd = (
         'pip install streamlit pyrebase4 google-cloud-firestore google-auth '
         'google-api-core grpcio "protobuf>=4.24,<5" pandas altair openpyxl '
-        'pyarrow sseclient-py requests_toolbelt'
-    )
+            )
     st.caption("Comando sugerido (ambiente local):")
     st.code(pip_cmd, language="bash")
 
@@ -162,26 +160,18 @@ def show_login_banner():
         st.image(str(hero), use_container_width=True)
 
 # =========================
-# Persistência local
-# =========================
+# Persistência local — CSV apenas
 PERSIST_DIR = Path("data")
 PERSIST_DIR.mkdir(exist_ok=True)
-PERSIST_PATH = PERSIST_DIR / "base.parquet"
+CSV_PATH = PERSIST_DIR / "base.csv"
 
 def save_base_to_disk(df: pd.DataFrame) -> None:
-    try:
-        df.to_parquet(PERSIST_PATH, index=False)
-    except Exception:
-        df.to_csv(PERSIST_PATH.with_suffix(".csv"), index=False, encoding="utf-8-sig")
+    df.to_csv(CSV_PATH, index=False, encoding="utf-8-sig")
 
 def load_base_from_disk() -> Optional[pd.DataFrame]:
-    if PERSIST_PATH.exists():
-        return pd.read_parquet(PERSIST_PATH)
-    csv_path = PERSIST_PATH.with_suffix(".csv")
-    if csv_path.exists():
-        return pd.read_csv(csv_path, dtype=str)
+    if CSV_PATH.exists():
+        return pd.read_csv(CSV_PATH, dtype=str)
     return None
-
 # =========================
 # Firestore helpers
 # =========================
