@@ -10,3 +10,4 @@ openpyxl>=3.1
 odfpy>=1.4.1
 sseclient-py
 requests_toolbelt
+requests
