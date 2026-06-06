@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 GestaWeb DS7 — e-SUS Monitoramento (DS VII) com login Firebase e bloqueio por UNIDADE
-- Login (Firebase Email/Password, via Pyrebase)
+- Login (Firebase Email/Password, via API REST oficial)
 - ADMIN único pode carregar até 69 planilhas (CSV/XLS/XLSX/ODS)
 - Base é persistida em disco para todos os usuários (data/base.parquet ou CSV de fallback)
 - Carrega credenciais do Firestore de um arquivo JSON separado
@@ -28,16 +28,17 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 import numpy as np
+import requests
 
 warnings.simplefilter("ignore", category=UserWarning)
 st.set_page_config(page_title="GestaWeb DS7 — e-SUS", layout="wide")
+
 # --- Dependências externas (checagem + instalador local opcional) ---
 import importlib, sys, subprocess
 
-# Pacotes que você listou (com versões seguras para Firestore)
+# Pacotes listados (com versões seguras e sem pyrebase)
 REQUIRED_PIP = [
     "streamlit>=1.36",
-    "pyrebase4==4.7.1",
     "google-cloud-firestore==2.16.0",
     "google-auth==2.33.0",
     "google-api-core==2.19.1",
@@ -48,16 +49,11 @@ REQUIRED_PIP = [
     "openpyxl>=3.1",
     "sseclient-py",
     "requests_toolbelt",
+    "requests",
 ]
 
 def _check_imports():
     missing = []
-    # atenção: o pacote instalado é "pyrebase4", mas o import é "pyrebase"
-    try:
-        importlib.import_module("pyrebase")
-    except Exception as e:
-        missing.append(("pyrebase4", "import pyrebase", repr(e)))
-
     try:
         importlib.import_module("google.cloud.firestore")
     except Exception as e:
@@ -76,11 +72,11 @@ if _missing:
     st.error("Dependências ausentes ou com erro no import:")
     st.write("\n".join([f"- **{pkg}** (falhou em `{hint}`) → {err}" for pkg, hint, err in _missing]))
 
-    # Mostra o comando pip que você pediu
+    # Mostra o comando pip atualizado
     pip_cmd = (
-        'pip install streamlit pyrebase4 google-cloud-firestore google-auth '
-        'google-api-core grpcio "protobuf>=4.24,<5" pandas altair openpyxl '
-            )
+        'pip install streamlit google-cloud-firestore google-auth '
+        'google-api-core grpcio "protobuf>=4.24,<5" pandas altair openpyxl requests'
+    )
     st.caption("Comando sugerido (ambiente local):")
     st.code(pip_cmd, language="bash")
 
@@ -97,7 +93,6 @@ if _missing:
     st.stop()
 
 # Se chegou aqui, os imports estão OK:
-import pyrebase                               # pacote instalado: pyrebase4
 from google.cloud import firestore
 from google.oauth2 import service_account
 
@@ -106,23 +101,8 @@ from google.oauth2 import service_account
 # =========================
 FIRESTORE_CREDENTIALS_PATH = "service_account.json"  # aponte para o seu JSON
 
-FIREBASE_CONFIG = {
-    "apiKey": "AIzaSyD7-HwufkeY97nP5I61DZJaeCTNY7ccvKo",
-    "authDomain": "gestawebds7raquelacioli.firebaseapp.com",
-    "projectId": "gestawebds7raquelacioli",
-    "storageBucket": "gestawebds7raquelacioli.appspot.com",
-    "messagingSenderId": "536966961533",
-    "appId": "1:536966961533:web:1f4b0bfe25f60799c31414",
-    "databaseURL": "https://gestawebds7raquelacioli-default-rtdb.firebaseio.com"
-}
-
-@st.cache_resource(show_spinner=False)
-def firebase_init():
-    try:
-        return pyrebase.initialize_app(FIREBASE_CONFIG)
-    except Exception as e:
-        st.error(f"Falha ao inicializar Pyrebase (login): {e}")
-        st.stop()
+# Chave Web do Firebase para autenticação REST (Login)
+FIREBASE_API_KEY = "AIzaSyD7-HwufkeY97nP5I61DZJaeCTNY7ccvKo"
 
 @st.cache_resource(show_spinner=False)
 def get_firestore_client():
@@ -137,8 +117,22 @@ def get_firestore_client():
         st.error(f"Falha ao conectar no Firestore: {e}")
         st.stop()
 
-def firebase_sign_in(firebase, email: str, password: str):
-    return firebase.auth().sign_in_with_email_and_password(email, password)
+def firebase_sign_in(email: str, password: str) -> dict:
+    """Faz login usando o endpoint oficial da API Identity Toolkit do Firebase Auth"""
+    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
+    payload = {
+        "email": email,
+        "password": password,
+        "returnSecureToken": True
+    }
+    response = requests.post(url, json=payload)
+    data = response.json()
+    
+    if response.status_code == 200:
+        return data
+    else:
+        error_message = data.get("error", {}).get("message", "Erro de autenticação desconhecido")
+        raise Exception(error_message)
 
 # =========================
 # Banner de login (opcional)
@@ -172,6 +166,7 @@ def load_base_from_disk() -> Optional[pd.DataFrame]:
     if CSV_PATH.exists():
         return pd.read_csv(CSV_PATH, dtype=str)
     return None
+
 # =========================
 # Firestore helpers
 # =========================
@@ -196,41 +191,6 @@ def sanitize_doc_id(s: str) -> str:
     s = re.sub(r"[^a-z0-9_\-\.]+", "-", s)
     s = s[:150].strip("-.")
     return s or f"doc_{uuid4().hex[:10]}"
-
-# def save_to_firestore(df: pd.DataFrame, collection_name: str = "gestantes_sifilis"):
-#     try:
-#         db = get_firestore_client()
-#         st.info(f"Salvando {len(df)} registros em '{collection_name}'...")
-#         sanitized_columns = {col: re.sub(r'[^a-zA-Z0-9_]', '_', col) for col in df.columns}
-#         df_sanitized = df.rename(columns=sanitized_columns)
-#         col_paciente = find_first_matching_col(df_sanitized, COLMAP["paciente"]) or df_sanitized.columns[0]
-#         unidade_col = "UNIDADE" if "UNIDADE" in df_sanitized.columns else None
-
-#         progress_bar = st.progress(0)
-#         batch = db.batch()
-#         batch_count = 0
-#         total = len(df_sanitized)
-
-#         for i, row in df_sanitized.iterrows():
-#             doc = {c: clean_firestore_value(v) for c, v in row.items()}
-#             paciente_id = sanitize_doc_id(str(doc.get(col_paciente, "")))
-#             unidade_id  = sanitize_doc_id(str(doc.get(unidade_col, "sem_unidade")))
-#             doc_id = f"{unidade_id}__{paciente_id}__{i}"
-#             doc["_timestamp_upload"] = firestore.SERVER_TIMESTAMP
-#             batch.set(db.collection(collection_name).document(doc_id), doc)
-#             batch_count += 1
-#             if batch_count >= 499:
-#                 batch.commit()
-#                 batch = db.batch()
-#                 batch_count = 0
-#             progress_bar.progress((i + 1) / total)
-#         if batch_count:
-#             batch.commit()
-#         progress_bar.empty()
-#         st.success("Registros salvos/atualizados com sucesso!")
-#     except Exception as e:
-#         st.error(f"Erro ao salvar no Firestore: {e}")
-#         st.exception(e)
 
 # =========================
 # Mapeamentos / critérios
@@ -275,17 +235,13 @@ LABELS = {
 # =========================
 ADMIN_EMAILS = {"vigilanciaepidemiologicadsvii@gmail.com"}
 
-# Para cada e-mail, informe PALAVRAS-CHAVE (famílias) da unidade.
-# Ex.: "bruno maia" fará o usuário ver ESF MAIS BRUNO MAIA I/III/IV/V/VI...
 EMAIL_TO_UNITS: Dict[str, List[str]] = {
     "brunomaiatbehansen@gmail.com": ["bruno maia"],
     "passarinhobaixotbehansen@gmail.com": ["passarinho baixo"],
     "passarinhoaltotbehansen@gmail.com": ["passarinho alto"],
-
     "altodoeucaliptotbehansen@gmail.com": ["alto do eucalipto"],
     "corregodoeucaliptotbehansen@gmail.com": ["corrego do eucalipto"],
     "corregodabicatbehansen@gmail.com": ["corrego da bica"],
-
     "alcidescodeceiratbehansen@gmail.com": ["alto jose bonifacio"],
     "morrodaconceicaotbehansen@gmail.com": ["morro da conceicao"],
     "mariomonteirotbehansen@gmail.com": ["mario monteiro"],
@@ -406,7 +362,6 @@ def read_any_table(file) -> Tuple[pd.DataFrame, Optional[str]]:
 
     unidade_hint = detect_unit_name(raw)
 
-    # Detecta linha de cabeçalho
     header_row = None
     for i in range(min(30, len(raw))):
         row = raw.iloc[i]
@@ -481,7 +436,7 @@ def single_sheet_xlsx(df: pd.DataFrame, sheet_name: str = "PLANILHA") -> bytes:
     return out.read()
 
 # =========================
-# Login (Firebase)
+# Login (Firebase REST)
 # =========================
 def login_block():
     show_login_banner()
@@ -492,17 +447,18 @@ def login_block():
         ok = st.form_submit_button("Entrar")
     if ok:
         try:
-            fb = firebase_init()
-            user = firebase_sign_in(fb, email_in.strip(), pwd_in)
+            # Login seguro via API REST do Firebase
+            user = firebase_sign_in(email_in.strip(), pwd_in)
             st.session_state["auth_ok"]   = True
             st.session_state["user_email"]= email_in.strip().lower()
             st.session_state["id_token"]  = user.get("idToken")
+            
             # Permissões
             if st.session_state["user_email"] in ADMIN_EMAILS:
                 st.session_state["allowed_units"] = ["*"]
             else:
                 st.session_state["allowed_units"] = EMAIL_TO_UNITS.get(st.session_state["user_email"], [])
-            st.success("Login realizado.")
+            st.success("Login realizado com sucesso.")
             st.rerun()
         except Exception as e:
             st.error(f"Falha no login: {e}")
@@ -561,8 +517,7 @@ if is_admin and uploaded_files:
         consolidated_df = pd.concat(dfs, ignore_index=True)
         st.session_state["base_df"] = consolidated_df
         save_base_to_disk(consolidated_df)
-        st.success("Base atualizada e salva em disco (disponível para todos).")
-        # save_to_firestore(consolidated_df.copy(), collection_name="gestantes")
+        st.success("Base updated e salva em disco (disponível para todos).")
 
 # Carrega base (sessão ou disco)
 if "base_df" not in st.session_state:
@@ -588,7 +543,6 @@ def _norm_view(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
 
 def _limpa_unidade(u: str) -> str:
-    # Remove o código após a vírgula (ex.: "ESF MAIS BRUNO MAIA I, 0000152900" -> "ESF MAIS BRUNO MAIA I")
     return str(u).split(",", 1)[0].strip()
 
 def _matches_keywords(unit_text: str, allowed_keywords_norm: set[str]) -> bool:
@@ -623,7 +577,6 @@ if not is_admin:
         st.stop()
 
     st.info("Visualizando somente a(s) família(s): " + ", ".join(sorted(set(allowed_units))))
-# ---------- fim do filtro ----------
 
 # ===== Prévia =====
 st.subheader("Pré-visualização da base (todas as colunas)")
@@ -653,7 +606,6 @@ if st.session_state["unit_filter_on"] and sel:
 st.write(f"Linhas após filtro por UNIDADE: {len(base_filtrada)}")
 st.dataframe(base_filtrada.head(300), use_container_width=True, height=420)
 
-# Fonte para relatórios
 df_fonte_relatorios = base_filtrada if (st.session_state["unit_filter_on"] and sel) else base
 
 # ===== Relatórios específicos =====
@@ -755,7 +707,7 @@ else:
         )
         st.altair_chart(chart.properties(height=420, width="container"), use_container_width=True)
 
-# ===== Resumo e comparativo por prefixo (opcional) =====
+# ===== Resumo e comparativo por prefixo =====
 TARGET_PREFIXES = [
     "ALTO DO EUCALIPTO","ALTO JOSE BONIFACIO","ESF MAIS BRUNO MAIA","ESF MAIS CORREGO DA BICA","BOLA NA REDE",
     "ALTO DA BRASILEIRA","CORREGO DO EUCALIPTO","ESF MAIS CORREGO JENIPAPO","ESF MAIS DOM HELDER","GUABIRABA",
@@ -767,9 +719,12 @@ def _norm_prefix(s: str) -> str:
     s = unicodedata.normalize("NFKD", str(s))
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
     return re.sub(r"\s+", " ", s).strip().lower()
+
 TARGET_PREFIXES_N = [_norm_prefix(p) for p in TARGET_PREFIXES]
+
 def _matches_any_prefix(u: str) -> bool:
     return any(_norm_prefix(u).startswith(pn) for pn in TARGET_PREFIXES_N)
+
 def unit_to_bucket(u: str) -> Optional[str]:
     nu = _norm_prefix(u)
     for raw_prefix, norm_prefix in zip(TARGET_PREFIXES, TARGET_PREFIXES_N):
@@ -838,7 +793,6 @@ else:
             df_barras = pd.concat(linhas, ignore_index=True) if linhas else pd.DataFrame(
                 columns=["bucket","quantidade","codigo","criterio"]
             )
-            # >>> garante tipo numérico para o eixo Y
             df_barras["quantidade"] = pd.to_numeric(df_barras["quantidade"], errors="coerce").fillna(0)
 
             ordem_buckets = [b for b in TARGET_PREFIXES if b in df_barras["bucket"].unique().tolist()]
@@ -852,25 +806,18 @@ else:
                                    file_name="comparativo_unidades_consolidadas.csv",
                                    mime="text/csv")
 
-            # >>> canais corretos (XOffset) + tooltips com title=
-            chart_buckets = alt.Chart(df_barras).mark_bar().encode()
-            x=alt.X("bucket:O", sort=ordem_buckets, title="Unidade (agrupada por prefixo)"),
-            y=alt.Y("quantidade:Q", title="Quantidade"),
-            color=alt.Color("criterio:N", title="Critério"),
-            xOffset=alt.XOffset("criterio:N"),
-                
             chart_buckets = alt.Chart(df_barras).mark_bar().encode(
-    x=alt.X("bucket:O", sort=ordem_buckets, title="Unidade (agrupada por prefixo)"),
-    y=alt.Y("quantidade:Q", title="Quantidade"),
-    color=alt.Color("criterio:N", title="Critério"),
-    xOffset=alt.XOffset("criterio:N"),  # importante: XOffset, não X
-    tooltip=[
-        alt.Tooltip("bucket:O",     title="Unidade"),
-        alt.Tooltip("criterio:N",   title="Critério"),
-        alt.Tooltip("quantidade:Q", title="Quantidade"),
-    ],
-)
-st.altair_chart(
-    chart_buckets.properties(height=440, width="container"),
-    use_container_width=True
-)
+                x=alt.X("bucket:O", sort=ordem_buckets, title="Unidade (agrupada por prefixo)"),
+                y=alt.Y("quantidade:Q", title="Quantidade"),
+                color=alt.Color("criterio:N", title="Critério"),
+                xOffset=alt.XOffset("criterio:N"),  
+                tooltip=[
+                    alt.Tooltip("bucket:O",     title="Unidade"),
+                    alt.Tooltip("criterio:N",   title="Critério"),
+                    alt.Tooltip("quantidade:Q", title="Quantidade"),
+                ],
+            )
+            st.altair_chart(
+                chart_buckets.properties(height=440, width="container"),
+                use_container_width=True
+            )
